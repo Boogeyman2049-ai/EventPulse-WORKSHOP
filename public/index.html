@@ -1,0 +1,1646 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EventPulse — Secure Purchase UI (Supabase Integrated)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & JetBrains Mono -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome 6 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#eef2ff',
+                            100: '#e0e7ff',
+                            400: '#818cf8',
+                            500: '#6366f1',
+                            600: '#4f46e5',
+                            700: '#4338ca',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #090d16;
+            color: #f8fafc;
+            overflow-x: hidden;
+        }
+
+        .ambient-bg {
+            background-color: #090d16;
+            background-image: 
+                radial-gradient(at 15% 15%, rgba(99, 102, 241, 0.14) 0px, transparent 45%),
+                radial-gradient(at 85% 20%, rgba(16, 185, 129, 0.10) 0px, transparent 45%),
+                radial-gradient(at 50% 85%, rgba(139, 92, 246, 0.12) 0px, transparent 50%);
+        }
+
+        .glass-card {
+            background: rgba(17, 24, 39, 0.78);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .glass-card-interactive {
+            background: rgba(17, 24, 39, 0.78);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .glass-card-interactive:hover {
+            transform: translateY(-4px);
+            border-color: rgba(99, 102, 241, 0.45);
+            box-shadow: 0 20px 35px -10px rgba(0, 0, 0, 0.6), 0 0 25px -5px rgba(99, 102, 241, 0.2);
+        }
+
+        @keyframes scanLaser {
+            0% { top: 6%; opacity: 0.9; }
+            50% { top: 90%; opacity: 1; }
+            100% { top: 6%; opacity: 0.9; }
+        }
+
+        .qr-laser {
+            position: absolute;
+            left: 6%;
+            right: 6%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #10b981, #34d399, #10b981, transparent);
+            box-shadow: 0 0 12px 2px rgba(16, 185, 129, 0.85);
+            animation: scanLaser 2.8s ease-in-out infinite;
+            pointer-events: none;
+        }
+
+        .holo-ticket {
+            background: linear-gradient(135deg, rgba(30, 41, 59, 0.92) 0%, rgba(15, 23, 42, 0.96) 100%);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .holo-ticket::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(
+                45deg,
+                transparent 40%,
+                rgba(99, 102, 241, 0.12) 45%,
+                rgba(16, 185, 129, 0.14) 50%,
+                rgba(236, 72, 153, 0.12) 55%,
+                transparent 60%
+            );
+            animation: holoShimmer 6s infinite linear;
+            pointer-events: none;
+        }
+
+        @keyframes holoShimmer {
+            0% { transform: translate(-25%, -25%) rotate(0deg); }
+            100% { transform: translate(25%, 25%) rotate(360deg); }
+        }
+
+        .screen-view {
+            display: none;
+            animation: screenFade 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .screen-view.active {
+            display: block;
+        }
+
+        @keyframes screenFade {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #090d16;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #1e293b;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #334155;
+        }
+
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #printable-ticket-area, #printable-ticket-area * {
+                visibility: visible;
+            }
+            #printable-ticket-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                background: #0f172a !important;
+                color: white !important;
+                box-shadow: none !important;
+            }
+        }
+    </style>
+</head>
+<body class="ambient-bg min-h-screen flex flex-col selection:bg-indigo-500 selection:text-white">
+
+    <!-- ================= TOP GLOBAL HEADER & STEPPER ================= -->
+    <header class="sticky top-0 z-40 glass-card border-b border-slate-800/80">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex flex-wrap items-center justify-between py-3 gap-4">
+                
+                <!-- Brand Identity -->
+                <div class="flex items-center gap-3 cursor-pointer group" onclick="window.app.handleLogoClick()">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25 group-hover:scale-105 transition-transform">
+                        <i class="fa-solid fa-ticket-simple text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span class="font-extrabold text-lg tracking-tight text-white">EventPulse</span>
+                            <span class="hidden sm:inline-block text-[10px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
+                                Supabase REST API
+                            </span>
+                        </div>
+                        <div class="flex items-center gap-1.5 text-xs text-slate-400">
+                            <span id="db-status-dot" class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                            <span id="db-status-text" class="font-mono text-[11px]">Backend API Online</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4-Step Visual Progress Stepper -->
+                <nav aria-label="Purchase Progress" class="hidden lg:flex items-center bg-slate-900/90 border border-slate-800 rounded-xl p-1.5 gap-1">
+                    <button type="button" onclick="window.app.stepClick(1)" id="step-btn-1" class="step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">
+                        <span class="step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono">1</span>
+                        <span>Signup / Auth</span>
+                    </button>
+                    <i class="fa-solid fa-chevron-right text-[10px] text-slate-600 px-1"></i>
+                    <button type="button" onclick="window.app.stepClick(2)" id="step-btn-2" class="step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">
+                        <span class="step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono">2</span>
+                        <span>Event Catalog</span>
+                    </button>
+                    <i class="fa-solid fa-chevron-right text-[10px] text-slate-600 px-1"></i>
+                    <button type="button" onclick="window.app.stepClick(3)" id="step-btn-3" class="step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">
+                        <span class="step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono">3</span>
+                        <span>Buy Ticket (QR)</span>
+                    </button>
+                    <i class="fa-solid fa-chevron-right text-[10px] text-slate-600 px-1"></i>
+                    <button type="button" onclick="window.app.stepClick(4)" id="step-btn-4" class="step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all">
+                        <span class="step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono">4</span>
+                        <span>Verified Pass</span>
+                    </button>
+                </nav>
+
+                <!-- Right Controls: Organizer Inspector, Currency, Wallet Drawer, User Profile -->
+                <div class="flex items-center gap-2.5">
+                    
+                    <!-- Currency Toggle -->
+                    <button type="button" onclick="window.app.toggleCurrency()" id="currency-btn" class="px-2.5 py-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-xs font-mono text-slate-200 border border-slate-700 transition-colors" title="Switch Currency Display">
+                        ₹ INR
+                    </button>
+
+                    <!-- My Tickets Wallet Button (GET /api/me/registrations) -->
+                    <button type="button" onclick="window.app.toggleWallet(true)" class="relative px-3 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-xs font-semibold flex items-center gap-2 transition-all">
+                        <i class="fa-solid fa-wallet"></i>
+                        <span class="hidden sm:inline">My Tickets</span>
+                        <span id="wallet-count-badge" class="px-1.5 py-0.2 bg-indigo-500 text-white rounded-full text-[10px] font-mono">0</span>
+                    </button>
+
+                    <!-- Logged-in User Profile Badge -->
+                    <div id="header-user-pill" class="hidden items-center gap-2 pl-2 border-l border-slate-800">
+                        <div class="text-right hidden md:block">
+                            <div class="flex items-center gap-1.5 justify-end">
+                                <span id="header-userrole" class="text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 uppercase">attendee</span>
+                                <div id="header-username" class="text-xs font-semibold text-white leading-none">Guest</div>
+                            </div>
+                            <div id="header-useremail" class="text-[10px] font-mono text-slate-400 truncate max-w-[130px]">Not signed in</div>
+                        </div>
+                        <button type="button" onclick="window.app.logout()" class="p-2 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 border border-slate-700 transition-colors" title="Sign Out">
+                            <i class="fa-solid fa-right-from-bracket text-xs"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Mobile Stepper Bar -->
+            <div class="flex lg:hidden items-center justify-between py-2 border-t border-slate-800/80 text-[11px] font-mono text-slate-400">
+                <span id="mobile-step-label" class="text-indigo-400 font-semibold">Step 1 of 4: Signup & Authentication</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ================= MAIN APPLICATION CONTENT ================= -->
+    <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+
+        <!-- =======================================================================
+             SCREEN 1: SIGNUP & LOGIN
+             ======================================================================= -->
+        <section id="screen-1" class="screen-view active">
+            <div class="mb-8 flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-800/80">
+                <div>
+                    <div class="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-indigo-400 mb-1">
+                        <span class="w-5 h-5 rounded-full bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-[11px]">1</span>
+                        Screen 01 // Identity & JWT Authentication
+                    </div>
+                    <h1 class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">Signup & Secure Login</h1>
+                    <p class="text-sm text-slate-400 mt-1">Authenticate to receive a secure JWT token required for ticket registrations and wallet access.</p>
+                </div>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button type="button" onclick="window.app.fillDemoLogin('attendee')" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-indigo-300 border border-indigo-500/30 flex items-center gap-2 transition-all">
+                        <i class="fa-solid fa-user"></i>
+                        Attendee Demo
+                    </button>
+                    <button type="button" onclick="window.app.fillDemoLogin('organizer')" class="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-amber-300 border border-amber-500/30 flex items-center gap-2 transition-all">
+                        <i class="fa-solid fa-shield-halved"></i>
+                        Organizer Demo
+                    </button>
+                </div>
+            </div>
+
+            <!-- Two-Card Connected Flow -->
+            <div class="grid grid-cols-1 lg:grid-cols-11 gap-6 items-center">
+                
+                <!-- LEFT CARD: LOGIN -->
+                <div id="auth-login-panel" class="lg:col-span-5 glass-card rounded-2xl p-6 sm:p-8 border-2 border-indigo-500/50 shadow-2xl relative overflow-hidden">
+                    <div class="absolute top-0 right-0 px-3 py-1 bg-indigo-600/20 border-b border-l border-indigo-500/30 rounded-bl-xl text-[11px] font-mono text-indigo-300">
+                        EXISTING USER
+                    </div>
+
+                    <div class="mb-6">
+                        <h2 class="text-2xl font-bold text-white flex items-center gap-2.5">
+                            <i class="fa-solid fa-right-to-bracket text-indigo-400"></i>
+                            Login
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-1">Authenticates via Supabase Auth / POST /api/auth/login</p>
+                    </div>
+
+                    <form id="form-login" onsubmit="window.app.handleLogin(event)" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-mono uppercase tracking-wider text-slate-300 mb-1.5">Email Address</label>
+                            <div class="relative">
+                                <i class="fa-regular fa-envelope absolute left-3.5 top-3.5 text-slate-500 text-sm"></i>
+                                <input id="login-username" type="email" required placeholder="arjun@eventpulse.io"
+                                    class="w-full pl-10 pr-4 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-mono uppercase tracking-wider text-slate-300 mb-1.5">Password</label>
+                            <div class="relative">
+                                <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500 text-sm"></i>
+                                <input id="login-password" type="password" required placeholder="••••••••"
+                                    class="w-full pl-10 pr-10 py-2.5 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                                <button type="button" onclick="window.app.togglePasswordVisibility('login-password', 'login-eye')" class="absolute right-3.5 top-3 text-slate-400 hover:text-white">
+                                    <i id="login-eye" class="fa-regular fa-eye text-sm"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <button type="submit" id="login-btn-submit" class="w-full py-3 px-5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm shadow-lg shadow-indigo-600/25 flex items-center justify-center gap-2 transition-all">
+                            <span>Login to Event Catalog</span>
+                            <i class="fa-solid fa-arrow-right text-xs"></i>
+                        </button>
+                    </form>
+
+                    <div class="mt-6 pt-5 border-t border-slate-800 flex items-center justify-between text-sm">
+                        <span class="text-slate-400">Don't have an account?</span>
+                        <button type="button" onclick="window.app.focusAuthCard('signup')" class="font-bold text-indigo-400 hover:text-indigo-300 underline underline-offset-4 flex items-center gap-1.5">
+                            <span>Sign up</span>
+                            <i class="fa-solid fa-arrow-right-long"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- MIDDLE CONNECTOR -->
+                <div class="lg:col-span-1 flex flex-col items-center justify-center py-2">
+                    <div class="hidden lg:flex flex-col items-center gap-2 text-slate-500">
+                        <div class="w-10 h-10 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-indigo-400">
+                            <i class="fa-solid fa-arrow-right-long text-lg animate-pulse"></i>
+                        </div>
+                        <span class="text-[10px] font-mono uppercase tracking-widest text-slate-500">OR</span>
+                    </div>
+                </div>
+
+                <!-- RIGHT CARD: SIGNUP -->
+                <div id="auth-signup-panel" class="lg:col-span-5 glass-card rounded-2xl p-6 sm:p-8 border border-slate-800 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 px-3 py-1 bg-emerald-500/15 border-b border-l border-emerald-500/30 rounded-bl-xl text-[11px] font-mono text-emerald-300">
+                        NEW REGISTRATION
+                    </div>
+
+                    <div class="mb-5">
+                        <h2 class="text-2xl font-bold text-white flex items-center gap-2.5">
+                            <i class="fa-solid fa-user-plus text-emerald-400"></i>
+                            Create account
+                        </h2>
+                        <p class="text-xs text-slate-400 mt-1">Registers in Supabase Auth & public.users table</p>
+                    </div>
+
+                    <form id="form-signup" onsubmit="window.app.handleSignup(event)" class="space-y-3.5">
+                        <div>
+                            <label class="block text-xs font-mono uppercase tracking-wider text-slate-300 mb-1">Phone Number</label>
+                            <input id="signup-phone" type="tel" required placeholder="+91 98765 43210"
+                                class="w-full px-3.5 py-2 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+                        </div>
+
+                        <div>
+                            <label class="block text-xs font-mono uppercase tracking-wider text-slate-300 mb-1">Email Address</label>
+                            <input id="signup-email" type="email" required placeholder="attendee@eventpulse.io"
+                                class="w-full px-3.5 py-2 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+                        </div>
+
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                            <div>
+                                <label class="block text-xs font-mono uppercase tracking-wider text-slate-300 mb-1">Full Name</label>
+                                <input id="signup-username" type="text" required placeholder="Arjun Mehta"
+                                    class="w-full px-3.5 py-2 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-mono uppercase tracking-wider text-slate-300 mb-1">Password</label>
+                                <input id="signup-password" type="password" required placeholder="Min 6 chars"
+                                    class="w-full px-3.5 py-2 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500">
+                            </div>
+                        </div>
+
+                        <div class="pt-3 flex items-center justify-between border-t border-slate-800/80">
+                            <button type="button" onclick="window.app.focusAuthCard('login')" class="text-xs text-slate-400 hover:text-white">
+                                ← Back to Login
+                            </button>
+                            <button type="submit" class="px-7 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-sm shadow-lg shadow-emerald-500/20 flex items-center gap-2 transition-all">
+                                <span>Create</span>
+                                <i class="fa-solid fa-check"></i>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- =======================================================================
+             SCREEN 2: EVENTS CATALOG (GET /api/events)
+             ======================================================================= -->
+        <section id="screen-2" class="screen-view">
+            <div class="mb-6 flex flex-col lg:flex-row lg:items-end justify-between gap-4 pb-5 border-b border-slate-800/80">
+                <div>
+                    <div class="inline-flex items-center gap-2 text-xs font-mono uppercase tracking-wider text-indigo-400 mb-1">
+                        <span class="w-5 h-5 rounded-full bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-[11px]">2</span>
+                        Screen 02 // Live Event Directory
+                    </div>
+                    <h1 class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">Discover & Select Event</h1>
+                    <p class="text-sm text-slate-400 mt-1">Live data queried via <code class="text-indigo-300 font-mono">GET /api/events</code> from PostgreSQL.</p>
+                </div>
+
+                <!-- Search Input -->
+                <div class="flex items-center gap-3">
+                    <div class="relative min-w-[260px]">
+                        <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-500 text-xs"></i>
+                        <input id="event-search-input" type="text" oninput="window.app.handleEventSearch(this.value)" placeholder="Search events, city, or topic..."
+                            class="w-full pl-9 pr-8 py-2 rounded-xl bg-slate-900/90 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Category Filter Pills -->
+            <div class="flex items-center gap-2 overflow-x-auto pb-4 mb-6 no-scrollbar" id="category-pills-container">
+                <button type="button" onclick="window.app.setCategory('ALL')" data-cat="ALL" class="cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-indigo-600 text-white shadow-md shadow-indigo-600/25 shrink-0 transition-all">
+                    All Events
+                </button>
+                <button type="button" onclick="window.app.setCategory('Tech & AI')" data-cat="Tech & AI" class="cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 shrink-0 transition-all">
+                    <i class="fa-solid fa-microchip mr-1.5 text-indigo-400"></i>Tech & AI
+                </button>
+                <button type="button" onclick="window.app.setCategory('Music & Live')" data-cat="Music & Live" class="cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 shrink-0 transition-all">
+                    <i class="fa-solid fa-music mr-1.5 text-pink-400"></i>Music & Live
+                </button>
+                <button type="button" onclick="window.app.setCategory('Gaming & Esports')" data-cat="Gaming & Esports" class="cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 shrink-0 transition-all">
+                    <i class="fa-solid fa-gamepad mr-1.5 text-emerald-400"></i>Gaming & Esports
+                </button>
+                <button type="button" onclick="window.app.setCategory('Design & Workshops')" data-cat="Design & Workshops" class="cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-800 shrink-0 transition-all">
+                    <i class="fa-solid fa-pen-ruler mr-1.5 text-amber-400"></i>Design & Workshops
+                </button>
+            </div>
+
+            <!-- 2x2 Event Grid Container -->
+            <div class="glass-card rounded-3xl p-5 sm:p-8 border border-slate-800/90 shadow-2xl relative">
+                <div id="events-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- Populated dynamically via fetch() -->
+                </div>
+
+                <!-- Bottom Bar with 2x2 Wireframe Pagination -->
+                <div class="mt-8 pt-5 border-t border-slate-800/90 flex flex-col sm:flex-row items-center justify-between gap-4">
+                    <div class="text-xs text-slate-400 flex items-center gap-2">
+                        <i class="fa-solid fa-circle-info text-indigo-400"></i>
+                        <span>Showing <strong id="events-showing-Text" class="text-white">4</strong> events per page (2×2 Wireframe Grid)</span>
+                    </div>
+
+                    <div class="flex items-center gap-4">
+                        <div id="pagination-buttons" class="flex items-center gap-1.5">
+                            <!-- Populated dynamically -->
+                        </div>
+                        <div class="px-4 py-1.5 rounded-xl bg-indigo-500/15 border border-indigo-500/40 font-mono text-sm font-bold text-indigo-300" id="wireframe-page-indicator">
+                            Pg. 1
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- =======================================================================
+             SCREEN 3: REGISTER / BUY TICKET (POST /api/registrations)
+             ======================================================================= -->
+        <section id="screen-3" class="screen-view">
+            <!-- Conflict Warning Banner (Shown if 409 happens) -->
+            <div id="conflict-alert-banner" class="hidden mb-6 p-4 rounded-2xl bg-rose-500/15 border-2 border-rose-500/40 text-rose-200">
+                <div class="flex items-start gap-3">
+                    <i class="fa-solid fa-triangle-exclamation text-rose-400 text-xl mt-0.5"></i>
+                    <div>
+                        <h4 class="font-bold text-sm text-white" id="conflict-alert-title">409 Conflict Detected</h4>
+                        <p class="text-xs mt-1 text-rose-200/90" id="conflict-alert-desc"></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Navigation & Hold Timer -->
+            <div class="mb-6 flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-800/80">
+                <div>
+                    <button type="button" onclick="window.app.goToStep(2)" class="text-xs font-mono text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5 mb-2">
+                        <i class="fa-solid fa-arrow-left"></i>
+                        <span>Back to Event Catalog</span>
+                    </button>
+                    <div class="flex items-center gap-3">
+                        <h1 class="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">Register — Buy Ticket</h1>
+                        <span class="px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                            <i class="fa-solid fa-shield-halved mr-1"></i>Supabase Atomic RPC
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Seat Hold Countdown Timer -->
+                <div class="flex items-center gap-3 px-4 py-2.5 rounded-2xl bg-amber-500/10 border border-amber-500/30">
+                    <i class="fa-regular fa-clock text-amber-400 text-lg"></i>
+                    <div>
+                        <div class="text-[10px] font-mono uppercase tracking-wider text-amber-300/80">Seat Reservation Timer</div>
+                        <div id="checkout-timer" class="text-base font-mono font-bold text-amber-300">05:00</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Buy Ticket QR Container -->
+            <div class="glass-card rounded-3xl border-2 border-indigo-500/40 shadow-2xl overflow-hidden">
+                <div class="bg-slate-900/90 px-6 sm:px-8 py-4 border-b border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <span class="px-3 py-1 rounded-lg bg-indigo-600 text-white font-bold text-sm tracking-wide">
+                            Buy Ticket
+                        </span>
+                        <span id="checkout-event-badge" class="text-xs font-mono text-slate-400">
+                            EVENT ID: #...
+                        </span>
+                    </div>
+                    <div class="text-xs font-mono text-slate-400 flex items-center gap-2">
+                        <span>Attendee: <strong id="checkout-attendee-name" class="text-white">User</strong></span>
+                    </div>
+                </div>
+
+                <div class="p-6 sm:p-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+                    
+                    <!-- LEFT COLUMN: DYNAMIC QR CODE -->
+                    <div class="lg:col-span-5 flex flex-col items-center">
+                        <div class="relative p-5 bg-white rounded-2xl shadow-2xl border-4 border-indigo-500/30 w-64 h-64 flex items-center justify-center">
+                            <div class="qr-laser"></div>
+                            <div id="dynamic-qr-container" class="w-full h-full flex items-center justify-center"></div>
+                        </div>
+
+                        <div class="mt-4 flex items-center gap-2">
+                            <span class="px-2.5 py-1 rounded-md bg-slate-800 text-[11px] font-mono text-emerald-400 border border-slate-700">
+                                <i class="fa-solid fa-qrcode mr-1"></i>POST /api/registrations
+                            </span>
+                        </div>
+
+                        <div class="mt-3 w-full max-w-xs bg-slate-950/90 rounded-xl p-3 border border-slate-800 text-[11px] font-mono text-slate-400">
+                            <div class="text-[10px] uppercase text-slate-500 mb-1 flex justify-between">
+                                <span>Encoded QR Payload</span>
+                                <span class="text-indigo-400">JSON</span>
+                            </div>
+                            <div id="qr-payload-preview" class="truncate text-slate-300"></div>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN: CONFIGURATION & CTAS -->
+                    <div class="lg:col-span-7 space-y-6">
+                        <div class="p-5 rounded-2xl bg-indigo-950/30 border border-indigo-500/30 space-y-3">
+                            <span id="checkout-event-category-pill" class="px-2.5 py-0.5 rounded-full text-[10px] font-mono uppercase bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                                Tech & AI
+                            </span>
+                            <p class="text-lg sm:text-xl font-medium text-slate-200 leading-relaxed">
+                                Scan this code to buy the ticket for 
+                                <span id="checkout-event-title-underline" class="inline-block font-extrabold text-amber-300 border-b-2 border-amber-400 px-2 mx-1">
+                                    ...
+                                </span>
+                                event
+                            </p>
+                            <div class="pt-2 border-t border-indigo-500/20 flex flex-wrap items-center gap-4 text-xs text-slate-300 font-mono">
+                                <span><i class="fa-regular fa-calendar mr-1.5 text-indigo-400"></i><span id="checkout-event-date">...</span></span>
+                                <span><i class="fa-solid fa-location-dot mr-1.5 text-indigo-400"></i><span id="checkout-event-venue">...</span></span>
+                                <span><i class="fa-solid fa-chair mr-1.5 text-emerald-400"></i><span id="checkout-event-seats-left">24 seats left</span></span>
+                            </div>
+                        </div>
+
+                        <!-- Ticket Tier & Quantity Stepper -->
+                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                            <div class="sm:col-span-2">
+                                <label class="block text-xs font-mono uppercase tracking-wider text-slate-400 mb-2">Select Pass Tier</label>
+                                <div class="grid grid-cols-3 gap-2">
+                                    <button type="button" onclick="window.app.setTicketTier('STANDARD')" id="tier-btn-STANDARD" class="tier-btn p-2.5 rounded-xl border text-left transition-all">
+                                        <div class="text-xs font-bold text-white">Standard</div>
+                                        <div class="text-[10px] font-mono text-slate-400">1.0x Base</div>
+                                    </button>
+                                    <button type="button" onclick="window.app.setTicketTier('VIP')" id="tier-btn-VIP" class="tier-btn p-2.5 rounded-xl border text-left transition-all">
+                                        <div class="text-xs font-bold text-white">VIP Row</div>
+                                        <div class="text-[10px] font-mono text-indigo-300">1.8x • Lounge</div>
+                                    </button>
+                                    <button type="button" onclick="window.app.setTicketTier('BACKSTAGE')" id="tier-btn-BACKSTAGE" class="tier-btn p-2.5 rounded-xl border text-left transition-all">
+                                        <div class="text-xs font-bold text-white">Backstage</div>
+                                        <div class="text-[10px] font-mono text-amber-300">2.5x • Access</div>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="block text-xs font-mono uppercase tracking-wider text-slate-400 mb-2">Quantity</label>
+                                <div class="flex items-center justify-between bg-slate-900 border border-slate-700 rounded-xl p-1.5 h-[54px]">
+                                    <button type="button" onclick="window.app.changeQuantity(-1)" class="w-9 h-9 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold">-</button>
+                                    <span id="checkout-qty-display" class="font-mono font-bold text-lg text-white">1</span>
+                                    <button type="button" onclick="window.app.changeQuantity(1)" class="w-9 h-9 rounded-lg bg-slate-800 hover:bg-slate-700 text-white font-bold">+</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Price Breakdown -->
+                        <div class="bg-slate-900/90 rounded-2xl p-4 border border-slate-800 space-y-2 text-xs">
+                            <div class="flex justify-between text-slate-400">
+                                <span id="price-base-label">Base Pass</span>
+                                <span id="price-base-val" class="font-mono text-slate-200">₹0</span>
+                            </div>
+                            <div class="flex justify-between text-slate-400">
+                                <span>Platform & Gateway Fee (5%)</span>
+                                <span id="price-fee-val" class="font-mono text-slate-200">₹0</span>
+                            </div>
+                            <div class="pt-2 border-t border-slate-800 flex justify-between items-baseline">
+                                <span class="text-sm font-bold text-white">Total Payable</span>
+                                <span id="price-total-val" class="text-xl font-mono font-extrabold text-emerald-400">₹0</span>
+                            </div>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 pt-2">
+                            <button type="button" id="simulate-pay-btn" onclick="window.app.confirmAndPay()" class="flex-grow py-3.5 px-6 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-extrabold text-sm shadow-lg shadow-emerald-500/25 flex items-center justify-center gap-2.5 transition-all">
+                                <i class="fa-solid fa-qrcode text-base"></i>
+                                <span>Simulate QR Scan & Complete Payment</span>
+                            </button>
+                            <button type="button" onclick="window.app.goToStep(2)" class="py-3.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold border border-slate-700 transition-colors">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- =======================================================================
+             SCREEN 4: SUCCESS & VERIFIED DIGITAL PASS
+             ======================================================================= -->
+        <section id="screen-4" class="screen-view">
+            <div class="max-w-3xl mx-auto">
+                <div class="glass-card rounded-3xl p-8 text-center border-2 border-emerald-500/40 shadow-2xl mb-8 relative overflow-hidden">
+                    <div class="mx-auto w-20 h-20 rounded-full bg-emerald-500/20 border-2 border-emerald-400 flex items-center justify-center mb-4 shadow-lg shadow-emerald-500/20">
+                        <i class="fa-solid fa-check text-4xl text-emerald-400"></i>
+                    </div>
+
+                    <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-mono mb-2">
+                        <span>HTTP 201 CREATED // VERIFIED</span>
+                    </div>
+
+                    <h1 class="text-4xl sm:text-5xl font-extrabold text-white tracking-tight mb-2">Success</h1>
+                    <p class="text-slate-300 text-sm max-w-md mx-auto">
+                        Your ticket has been recorded in PostgreSQL and your digital entry pass is minted.
+                    </p>
+
+                    <div class="mt-4 inline-flex flex-wrap justify-center gap-3 text-xs font-mono text-slate-400">
+                        <span class="px-3 py-1 rounded-lg bg-slate-900 border border-slate-800">
+                            TX HASH: <strong id="success-tx-hash" class="text-indigo-400">0x...</strong>
+                        </span>
+                        <span class="px-3 py-1 rounded-lg bg-slate-900 border border-slate-800">
+                            STATUS: <strong class="text-emerald-400">CONFIRMED</strong>
+                        </span>
+                    </div>
+                </div>
+
+                <!-- HOLOGRAPHIC TICKET PASS -->
+                <div id="printable-ticket-area" class="holo-ticket rounded-3xl border border-slate-700 shadow-2xl overflow-hidden mb-8">
+                    <div class="bg-gradient-to-r from-indigo-600 via-purple-600 to-emerald-600 px-6 py-4 flex items-center justify-between">
+                        <div class="flex items-center gap-2.5">
+                            <i class="fa-solid fa-ticket text-white text-lg"></i>
+                            <span class="font-extrabold text-sm tracking-wider uppercase text-white">EventPulse Official Entry Pass</span>
+                        </div>
+                        <span id="pass-tier-badge" class="px-3 py-0.5 rounded-full bg-black/30 backdrop-blur text-white font-mono text-xs font-bold border border-white/20">
+                            VIP PASS
+                        </span>
+                    </div>
+
+                    <div class="p-6 sm:p-8 grid grid-cols-1 md:grid-cols-12 gap-6 items-center relative">
+                        <div class="md:col-span-8 space-y-5 md:border-r md:border-dashed md:border-slate-700 md:pr-6">
+                            <div>
+                                <div id="pass-category" class="text-xs font-mono uppercase tracking-widest text-indigo-400 mb-1">Category</div>
+                                <h2 id="pass-event-title" class="text-2xl font-extrabold text-white leading-snug">Event Title</h2>
+                            </div>
+
+                            <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs">
+                                <div>
+                                    <div class="text-slate-500 font-mono uppercase">Date & Time</div>
+                                    <div id="pass-date" class="font-semibold text-slate-200 mt-0.5">...</div>
+                                </div>
+                                <div>
+                                    <div class="text-slate-500 font-mono uppercase">Venue</div>
+                                    <div id="pass-venue" class="font-semibold text-slate-200 mt-0.5">...</div>
+                                </div>
+                                <div>
+                                    <div class="text-slate-500 font-mono uppercase">Seat Allocation</div>
+                                    <div id="pass-seats" class="font-mono font-bold text-emerald-400 mt-0.5">...</div>
+                                </div>
+                            </div>
+
+                            <div class="pt-4 border-t border-slate-800 grid grid-cols-2 sm:grid-cols-3 gap-4 text-xs">
+                                <div>
+                                    <div class="text-slate-500 font-mono uppercase">Attendee</div>
+                                    <div id="pass-attendee" class="font-semibold text-white mt-0.5">...</div>
+                                </div>
+                                <div>
+                                    <div class="text-slate-500 font-mono uppercase">Contact</div>
+                                    <div id="pass-contact" class="font-mono text-slate-300 mt-0.5 truncate">...</div>
+                                </div>
+                                <div>
+                                    <div class="text-slate-500 font-mono uppercase">Total Paid</div>
+                                    <div id="pass-amount" class="font-mono font-bold text-amber-300 mt-0.5">₹0</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Gate Verification QR -->
+                        <div class="md:col-span-4 flex flex-col items-center justify-center text-center">
+                            <div id="pass-qr-box" class="p-3 bg-white rounded-2xl shadow-lg w-36 h-36 flex items-center justify-center"></div>
+                            <div id="pass-booking-id" class="mt-3 font-mono text-xs font-bold text-indigo-300 tracking-wider">
+                                #EP-...
+                            </div>
+                            <span class="text-[10px] font-mono text-slate-500">Show QR at Venue Gate</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-center gap-4">
+                    <button type="button" onclick="window.print()" class="px-6 py-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm shadow-lg flex items-center gap-2">
+                        <i class="fa-solid fa-print"></i>
+                        <span>Print Ticket Pass</span>
+                    </button>
+                    <button type="button" onclick="window.app.toggleWallet(true)" class="px-6 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-sm border border-slate-700 flex items-center gap-2">
+                        <i class="fa-solid fa-wallet text-indigo-400"></i>
+                        <span>Open My Tickets Wallet</span>
+                    </button>
+                    <button type="button" onclick="window.app.goToStep(2)" class="px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 font-semibold text-sm border border-slate-800 flex items-center gap-2">
+                        <i class="fa-solid fa-compass"></i>
+                        <span>Browse More Events</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ================= EVENT DETAILS MODAL (GET /api/events/:id) ================= -->
+    <div id="event-details-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4 overflow-y-auto">
+        <div class="glass-card border border-slate-700 rounded-3xl max-w-3xl w-full max-h-[90vh] overflow-y-auto shadow-2xl my-auto">
+            <div id="modal-hero-banner" class="bg-gradient-to-r from-indigo-600 via-blue-600 to-cyan-500 p-6 sm:p-8 relative">
+                <button type="button" onclick="window.app.closeEventDetails()" class="absolute top-4 right-4 w-9 h-9 rounded-full bg-black/40 hover:bg-black/70 text-white flex items-center justify-center">
+                    <i class="fa-solid fa-xmark text-base"></i>
+                </button>
+                <div class="flex items-center gap-2 mb-2">
+                    <span id="modal-category-badge" class="px-3 py-1 rounded-lg bg-slate-950/90 text-white font-mono text-xs font-bold">Tech</span>
+                    <span id="modal-seats-badge" class="px-3 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-mono text-xs">...</span>
+                </div>
+                <h2 id="modal-event-title" class="text-2xl sm:text-3xl font-extrabold text-white">Event Title</h2>
+                <p id="modal-event-tagline" class="text-sm text-white/90 mt-1">Tagline</p>
+            </div>
+            <div class="p-6 sm:p-8 space-y-6 bg-slate-950/90">
+                <p id="modal-event-desc" class="text-sm text-slate-300 leading-relaxed"></p>
+                
+                <div class="flex flex-wrap items-center justify-between gap-4 pt-4 border-t border-slate-800">
+                    <div>
+                        <span class="text-xs text-slate-400 block font-mono">Price starting at</span>
+                        <span id="modal-price-val" class="text-2xl font-mono font-extrabold text-emerald-400">₹0</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <!-- Organizer Attendee List Button (GET /api/events/:id/registrations) -->
+                        <button type="button" id="modal-attendees-btn" onclick="window.app.viewEventAttendees(window.app.getSelectedEventId())" class="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-mono text-indigo-300 border border-indigo-500/30 flex items-center gap-1.5">
+                            <i class="fa-solid fa-users"></i>
+                            <span>Attendee List (Organizer Only)</span>
+                        </button>
+                        <button type="button" onclick="window.app.selectEventForCheckout(window.app.getSelectedEventId())" class="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 flex items-center gap-1.5">
+                            <span>Proceed to Buy Ticket</span>
+                            <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= ATTENDEE LIST DRAWER (GET /api/events/:id/registrations) ================= -->
+    <div id="attendee-modal" class="fixed inset-0 z-50 bg-black/80 backdrop-blur-md hidden items-center justify-center p-4 overflow-y-auto">
+        <div class="glass-card border border-slate-700 rounded-3xl max-w-2xl w-full max-h-[85vh] overflow-y-auto shadow-2xl p-6 sm:p-8 space-y-4">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-users-viewfinder text-indigo-400 text-lg"></i>
+                    <div>
+                        <h3 class="font-bold text-white text-base">Event Attendee Roster</h3>
+                        <p class="text-[11px] font-mono text-slate-400">Protected Endpoint: GET /api/events/:id/registrations</p>
+                    </div>
+                </div>
+                <button type="button" onclick="document.getElementById('attendee-modal').classList.add('hidden'); document.getElementById('attendee-modal').classList.remove('flex');" class="w-8 h-8 rounded-lg bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div id="attendee-content-container">
+                <!-- Injected via fetch() -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= SLIDE-OVER WALLET DRAWER (GET /api/me/registrations) ================= -->
+    <div id="wallet-drawer-backdrop" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm hidden items-center justify-end">
+        <div class="w-full max-w-md bg-slate-900 border-l border-slate-800 h-full flex flex-col justify-between p-6 shadow-2xl">
+            <div class="flex items-center justify-between pb-4 border-b border-slate-800">
+                <div class="flex items-center gap-2.5">
+                    <i class="fa-solid fa-wallet text-indigo-400 text-lg"></i>
+                    <div>
+                        <h3 class="font-bold text-white text-base">My Digital Ticket Wallet</h3>
+                        <p class="text-[10px] font-mono text-slate-400">Endpoint: GET /api/me/registrations</p>
+                    </div>
+                </div>
+                <button type="button" onclick="window.app.toggleWallet(false)" class="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white flex items-center justify-center">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+
+            <div id="wallet-tickets-list" class="flex-grow overflow-y-auto py-4 space-y-4"></div>
+
+            <div class="pt-4 border-t border-slate-800 flex justify-between items-center text-xs text-slate-400">
+                <span>Signed JWT Session</span>
+                <button type="button" onclick="window.app.toggleWallet(false)" class="px-4 py-2 rounded-lg bg-slate-800 text-white font-semibold">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= TOAST NOTIFICATION CONTAINER ================= -->
+    <div id="toast-container" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none"></div>
+
+    <!-- ================= VANILLA JAVASCRIPT INTEGRATION LOGIC ================= -->
+    <script>
+        // API Base URL config (defaults to current origin or port 5000)
+        const API_BASE = window.location.port === '5000' || window.location.pathname.startsWith('/api') 
+            ? '' 
+            : 'http://localhost:5000';
+
+        // Application State
+        const state = {
+            currentStep: 1,
+            currency: 'INR',
+            exchangeRate: 0.012,
+            jwtToken: localStorage.getItem('eventpulse_jwt') || null,
+            currentUser: JSON.parse(localStorage.getItem('eventpulse_user') || 'null'),
+            events: [],
+            selectedCategory: 'ALL',
+            searchQuery: '',
+            currentPage: 1,
+            totalPages: 1,
+            itemsPerPage: 4,
+            selectedEvent: null,
+            selectedTier: 'STANDARD',
+            ticketQty: 1,
+            appliedPromo: null,
+            countdownSeconds: 300,
+            countdownInterval: null,
+            myTickets: []
+        };
+
+        // Deterministic QR Code Generator
+        function generateDeterministicQR(payloadString, size = 210) {
+            const modules = 21;
+            const grid = Array.from({ length: modules }, () => Array(modules).fill(false));
+
+            const drawFinder = (r0, c0) => {
+                for (let r = 0; r < 7; r++) {
+                    for (let c = 0; c < 7; c++) {
+                        if (r === 0 || r === 6 || c === 0 || c === 6 || (r >= 2 && r <= 4 && c >= 2 && c <= 4)) {
+                            grid[r0 + r][c0 + c] = true;
+                        }
+                    }
+                }
+            };
+
+            drawFinder(0, 0);
+            drawFinder(0, modules - 7);
+            drawFinder(modules - 7, 0);
+
+            for (let i = 8; i < modules - 8; i++) {
+                grid[6][i] = i % 2 === 0;
+                grid[i][6] = i % 2 === 0;
+            }
+
+            let hash = 2166136261;
+            for (let i = 0; i < payloadString.length; i++) {
+                hash ^= payloadString.charCodeAt(i);
+                hash = Math.imul(hash, 16777619);
+            }
+
+            let seed = Math.abs(hash) || 123456789;
+            for (let r = 0; r < modules; r++) {
+                for (let c = 0; c < modules; c++) {
+                    const inTopLeft = r < 8 && c < 8;
+                    const inTopRight = r < 8 && c >= modules - 8;
+                    const inBottomLeft = r >= modules - 8 && c < 8;
+                    if (inTopLeft || inTopRight || inBottomLeft || r === 6 || c === 6) continue;
+
+                    seed = (seed * 1664525 + 1013904223) % 4294967296;
+                    grid[r][c] = (seed % 10) < 5;
+                }
+            }
+
+            const cellSize = size / modules;
+            let rects = '';
+            for (let r = 0; r < modules; r++) {
+                for (let c = 0; c < modules; c++) {
+                    if (grid[r][c]) {
+                        rects += `<rect x="${(c * cellSize).toFixed(2)}" y="${(r * cellSize).toFixed(2)}" width="${(cellSize + 0.35).toFixed(2)}" height="${(cellSize + 0.35).toFixed(2)}" fill="#0f172a" rx="1"/>`;
+                    }
+                }
+            }
+
+            return `
+                <svg viewBox="0 0 ${size} ${size}" width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+                    <rect width="${size}" height="${size}" fill="#ffffff" rx="8"/>
+                    ${rects}
+                </svg>
+            `;
+        }
+
+        function formatPrice(inrAmount) {
+            if (state.currency === 'INR') {
+                return `₹${Math.round(inrAmount).toLocaleString('en-IN')}`;
+            } else {
+                return `$${(inrAmount * state.exchangeRate).toFixed(2)}`;
+            }
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const colors = {
+                success: 'border-emerald-500/50 bg-slate-900/95 text-emerald-300',
+                error: 'border-rose-500/50 bg-slate-900/95 text-rose-300',
+                info: 'border-indigo-500/50 bg-slate-900/95 text-indigo-300'
+            };
+            const icons = {
+                success: 'fa-circle-check text-emerald-400',
+                error: 'fa-triangle-exclamation text-rose-400',
+                info: 'fa-circle-info text-indigo-400'
+            };
+
+            toast.className = `pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-2xl border shadow-2xl backdrop-blur-md transition-all duration-300 ${colors[type] || colors.info}`;
+            toast.innerHTML = `
+                <i class="fa-solid ${icons[type] || icons.info} text-base"></i>
+                <div class="text-xs font-medium text-white flex-grow">${message}</div>
+            `;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                toast.style.transform = 'translateY(8px)';
+                setTimeout(() => toast.remove(), 300);
+            }, 3400);
+        }
+
+        // =====================================================================
+        // BACKEND INTEGRATION 1: GET /api/events (CATALOG & 2x2 PAGINATION)
+        // =====================================================================
+        async function fetchEventsCatalog() {
+            try {
+                const params = new URLSearchParams({
+                    page: state.currentPage,
+                    limit: state.itemsPerPage,
+                    category: state.selectedCategory
+                });
+                if (state.searchQuery) {
+                    params.append('search', state.searchQuery);
+                }
+
+                const res = await fetch(`${API_BASE}/api/events?${params.toString()}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}: Failed to load events`);
+
+                const data = await res.json();
+                state.events = data.events || [];
+                state.totalPages = data.pagination?.totalPages || 1;
+                state.currentPage = data.pagination?.currentPage || 1;
+
+                renderEventsGrid();
+            } catch (err) {
+                console.error('fetchEventsCatalog error:', err);
+                showToast('Could not load events from API. Check backend.', 'error');
+            }
+        }
+
+        function renderEventsGrid() {
+            const grid = document.getElementById('events-grid');
+            document.getElementById('events-showing-Text').textContent = state.events.length;
+            document.getElementById('wireframe-page-indicator').textContent = `Pg. ${state.currentPage}`;
+
+            if (state.events.length === 0) {
+                grid.innerHTML = `
+                    <div class="md:col-span-2 py-12 text-center text-slate-400">
+                        <i class="fa-regular fa-calendar-xmark text-4xl mb-3 text-slate-600"></i>
+                        <p class="text-base font-semibold text-white">No matching events found</p>
+                    </div>
+                `;
+                return;
+            }
+
+            grid.innerHTML = state.events.map(ev => {
+                const price = Number(ev.price_inr || ev.priceINR || 0);
+                const seats = Number(ev.seats_left ?? ev.seatsLeft ?? 0);
+                const gradient = ev.banner_gradient || 'from-indigo-600 via-blue-600 to-cyan-500';
+
+                return `
+                <article class="glass-card-interactive rounded-2xl overflow-hidden flex flex-col justify-between">
+                    <div>
+                        <div class="h-36 bg-gradient-to-r ${gradient} relative p-4 flex flex-col justify-between">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="px-3 py-1 rounded-br-xl rounded-tl-lg bg-slate-950/90 text-white font-mono text-xs font-bold border border-white/15">
+                                    ${ev.category}
+                                </span>
+                                <div class="flex items-center gap-1.5">
+                                    <span class="px-2.5 py-0.5 rounded-full bg-black/45 backdrop-blur-md text-white font-mono text-[11px] flex items-center gap-1.5">
+                                        <span class="w-2 h-2 rounded-full ${seats < 15 ? 'bg-amber-400 animate-ping' : 'bg-emerald-400'}"></span>
+                                        ${seats} left
+                                    </span>
+                                </div>
+                            </div>
+                            <div class="flex items-end justify-between">
+                                <span class="text-[10px] font-mono uppercase px-2 py-0.5 rounded bg-white/20 text-white font-semibold backdrop-blur-sm">
+                                    ${ev.badge || 'EVENT'}
+                                </span>
+                                <i class="fa-solid ${ev.icon || 'fa-ticket'} text-white/25 text-4xl"></i>
+                            </div>
+                        </div>
+
+                        <div class="p-5 space-y-3">
+                            <h3 class="text-lg font-bold text-white leading-snug hover:text-indigo-400 cursor-pointer" onclick="window.app.openEventDetails('${ev.id}')">
+                                ${ev.title}
+                            </h3>
+                            <p class="text-xs font-medium text-indigo-300/90 line-clamp-1">${ev.tagline || ''}</p>
+                            <div class="space-y-1 text-xs text-slate-300 font-mono pt-1">
+                                <div><i class="fa-regular fa-calendar text-indigo-400 w-4"></i>${new Date(ev.date_time || Date.now()).toLocaleDateString()} • ${ev.duration || 'Full Day'}</div>
+                                <div><i class="fa-solid fa-location-dot text-indigo-400 w-4"></i>${ev.venue || 'Venue TBD'}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="px-5 py-3.5 bg-slate-900/80 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                        <div>
+                            <span class="text-[10px] font-mono uppercase text-slate-400 block">Starting From</span>
+                            <span class="text-base font-mono font-extrabold text-white">${formatPrice(price)}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button type="button" onclick="window.app.openEventDetails('${ev.id}')" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700">
+                                Details
+                            </button>
+                            <button type="button" onclick="window.app.selectEventForCheckout('${ev.id}')" class="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs shadow-md">
+                                <span>Buy Ticket</span>
+                                <i class="fa-solid fa-qrcode ml-1"></i>
+                            </button>
+                        </div>
+                    </div>
+                </article>
+            `}).join('');
+
+            // Pagination Buttons
+            const pagContainer = document.getElementById('pagination-buttons');
+            let pagHTML = `
+                <button type="button" onclick="window.app.setPage(${state.currentPage - 1})" ${state.currentPage === 1 ? 'disabled' : ''}
+                    class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-slate-300 disabled:opacity-40 hover:bg-slate-800">
+                    Prev
+                </button>
+            `;
+            for (let p = 1; p <= state.totalPages; p++) {
+                pagHTML += `
+                    <button type="button" onclick="window.app.setPage(${p})"
+                        class="w-8 h-8 rounded-lg font-mono text-xs font-bold transition-all ${p === state.currentPage ? 'bg-indigo-600 text-white' : 'bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'}">
+                        ${p}
+                    </button>
+                `;
+            }
+            pagHTML += `
+                <button type="button" onclick="window.app.setPage(${state.currentPage + 1})" ${state.currentPage === state.totalPages ? 'disabled' : ''}
+                    class="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-xs font-mono text-slate-300 disabled:opacity-40 hover:bg-slate-800">
+                    Next
+                </button>
+            `;
+            pagContainer.innerHTML = pagHTML;
+        }
+
+        // =====================================================================
+        // BACKEND INTEGRATION 2: GET /api/events/:id (EVENT DETAILS)
+        // =====================================================================
+        async function openEventDetails(eventId) {
+            try {
+                const res = await fetch(`${API_BASE}/api/events/${eventId}`);
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                const ev = data.event;
+                state.selectedEvent = ev;
+
+                document.getElementById('modal-category-badge').textContent = ev.category;
+                document.getElementById('modal-seats-badge').textContent = `${ev.seats_left ?? ev.seatsLeft} Seats Remaining`;
+                document.getElementById('modal-event-title').textContent = ev.title;
+                document.getElementById('modal-event-tagline').textContent = ev.tagline;
+                document.getElementById('modal-event-desc').textContent = ev.description;
+                document.getElementById('modal-price-val').textContent = formatPrice(ev.price_inr || ev.priceINR || 0);
+
+                const modal = document.getElementById('event-details-modal');
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            } catch (err) {
+                console.error('openEventDetails error:', err);
+                showToast('Failed to load event details', 'error');
+            }
+        }
+
+        function closeEventDetails() {
+            const modal = document.getElementById('event-details-modal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        // =====================================================================
+        // BACKEND INTEGRATION 3: POST /api/registrations (BUY TICKET)
+        // Handles 201 Created and 409 Conflict
+        // =====================================================================
+        async function confirmAndPay() {
+            if (!state.currentUser || !state.jwtToken) {
+                showToast('Authentication required. Please login first.', 'error');
+                goToStep(1);
+                return;
+            }
+
+            const btn = document.getElementById('simulate-pay-btn');
+            const originalHTML = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin text-base"></i><span>Contacting Supabase PostgreSQL...</span>`;
+
+            // Reset conflict alert banner
+            const alertBanner = document.getElementById('conflict-alert-banner');
+            alertBanner.classList.add('hidden');
+
+            try {
+                const payload = {
+                    event_id: state.selectedEvent.id,
+                    ticket_tier: state.selectedTier,
+                    quantity: state.ticketQty,
+                    promo_code: state.appliedPromo?.code || null
+                };
+
+                const res = await fetch(`${API_BASE}/api/registrations`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${state.jwtToken}`
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+
+                // -------------------------------------------------------------
+                // CASE 1: 201 CREATED (SUCCESSFUL REGISTRATION)
+                // -------------------------------------------------------------
+                if (res.status === 201) {
+                    showToast('Ticket Registration Confirmed! (HTTP 201)', 'success');
+                    populateSuccessScreen(data.registration);
+                    fetchMyRegistrations(); // Refresh wallet
+                    fetchEventsCatalog();   // Refresh seats
+                    goToStep(4);
+                    return;
+                }
+
+                // -------------------------------------------------------------
+                // CASE 2: 409 CONFLICT (ALREADY REGISTERED OR EVENT FULL)
+                // -------------------------------------------------------------
+                if (res.status === 409) {
+                    const errorMsg = data.error || 'Conflict: Registration could not be completed.';
+                    document.getElementById('conflict-alert-title').textContent = `409 Conflict: ${data.code || 'REGISTRATION_CONFLICT'}`;
+                    document.getElementById('conflict-alert-desc').textContent = errorMsg;
+                    alertBanner.classList.remove('hidden');
+
+                    showToast(`Conflict (409): ${errorMsg}`, 'error');
+                    return;
+                }
+
+                // CASE 3: 401 UNAUTHORIZED
+                if (res.status === 401) {
+                    showToast('Session expired or unauthorized. Please re-login.', 'error');
+                    goToStep(1);
+                    return;
+                }
+
+                // OTHER ERRORS
+                showToast(data.error || 'Registration failed', 'error');
+            } catch (err) {
+                console.error('confirmAndPay error:', err);
+                showToast('Network error contacting backend API', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHTML;
+            }
+        }
+
+        // =====================================================================
+        // BACKEND INTEGRATION 4: GET /api/me/registrations (WALLET)
+        // =====================================================================
+        async function fetchMyRegistrations() {
+            if (!state.jwtToken) return;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/me/registrations`, {
+                    headers: { 'Authorization': `Bearer ${state.jwtToken}` }
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    state.myTickets = data.registrations || [];
+                    renderWalletUI();
+                }
+            } catch (err) {
+                console.error('fetchMyRegistrations error:', err);
+            }
+        }
+
+        function renderWalletUI() {
+            document.getElementById('wallet-count-badge').textContent = state.myTickets.length;
+            const listEl = document.getElementById('wallet-tickets-list');
+
+            if (state.myTickets.length === 0) {
+                listEl.innerHTML = `
+                    <div class="text-center py-12 text-slate-500">
+                        <i class="fa-solid fa-ticket-simple text-3xl mb-2 opacity-40"></i>
+                        <p class="text-sm font-medium text-slate-300">No passes purchased yet</p>
+                        <p class="text-xs mt-1">Book an event ticket to store passes in your wallet.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            listEl.innerHTML = state.myTickets.map((t, idx) => `
+                <div class="p-4 rounded-2xl bg-slate-950/90 border border-slate-800 space-y-2">
+                    <div class="flex items-center justify-between">
+                        <span class="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-mono text-[10px] font-bold">#${t.booking_id}</span>
+                        <span class="text-xs font-mono font-bold text-emerald-400">${formatPrice(t.total_amount)}</span>
+                    </div>
+                    <h4 class="font-bold text-white text-sm">${t.event?.title || 'Event Pass'}</h4>
+                    <div class="text-[11px] font-mono text-slate-400 flex items-center justify-between">
+                        <span>${t.ticket_tier} (${t.quantity}x) • ${t.seats}</span>
+                        <span class="text-emerald-400 uppercase">${t.status}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // =====================================================================
+        // BACKEND INTEGRATION 5: GET /api/events/:id/registrations (ORGANIZER ONLY)
+        // Demonstrates 403 Forbidden vs 200 OK
+        // =====================================================================
+        async function viewEventAttendees(eventId) {
+            if (!state.jwtToken) {
+                showToast('Login required to access attendee list', 'error');
+                return;
+            }
+
+            const modal = document.getElementById('attendee-modal');
+            const container = document.getElementById('attendee-content-container');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            container.innerHTML = `<div class="text-center py-8 font-mono text-slate-400"><i class="fa-solid fa-spinner fa-spin mr-2"></i>Verifying organizer permissions & querying attendee roster...</div>`;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/events/${eventId}/registrations`, {
+                    headers: { 'Authorization': `Bearer ${state.jwtToken}` }
+                });
+
+                const data = await res.json();
+
+                // If Forbidden (Not the owning organizer)
+                if (res.status === 403) {
+                    container.innerHTML = `
+                        <div class="p-5 rounded-2xl bg-rose-500/10 border-2 border-rose-500/40 text-center space-y-3">
+                            <i class="fa-solid fa-lock text-3xl text-rose-400"></i>
+                            <h4 class="font-bold text-white text-base">403 Forbidden: Owning Organizer Only</h4>
+                            <p class="text-xs text-rose-200">${data.error || 'You do not own this event. RLS and backend access control strictly prevent attendees from viewing the attendee roster.'}</p>
+                            <div class="p-2 rounded bg-slate-950 font-mono text-[10px] text-slate-400">
+                                Log in as <strong>organizer@eventpulse.io</strong> to view attendees for this event.
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                // If Authorized (Owning Organizer)
+                if (res.ok) {
+                    const attendees = data.attendees || [];
+                    if (attendees.length === 0) {
+                        container.innerHTML = `<div class="text-center py-8 text-slate-400">No attendees have registered for this event yet.</div>`;
+                        return;
+                    }
+
+                    container.innerHTML = `
+                        <div class="space-y-3">
+                            <div class="flex justify-between items-center text-xs text-slate-400 font-mono">
+                                <span>Event: <strong class="text-white">${data.eventTitle}</strong></span>
+                                <span class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">${data.totalRegistrations} Registered</span>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-xs font-mono">
+                                    <thead class="bg-slate-900 text-slate-400 border-b border-slate-800">
+                                        <tr>
+                                            <th class="p-2.5">Booking ID</th>
+                                            <th class="p-2.5">Attendee</th>
+                                            <th class="p-2.5">Email</th>
+                                            <th class="p-2.5">Tier / Seats</th>
+                                            <th class="p-2.5">Amount</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-slate-800/60">
+                                        ${attendees.map(a => `
+                                            <tr class="hover:bg-slate-900/40">
+                                                <td class="p-2.5 font-bold text-indigo-400">#${a.booking_id}</td>
+                                                <td class="p-2.5 text-white">${a.user?.full_name || 'Attendee'}</td>
+                                                <td class="p-2.5 text-slate-400">${a.user?.email || 'N/A'}</td>
+                                                <td class="p-2.5 text-emerald-400">${a.ticket_tier} (${a.quantity}x)<br><span class="text-[10px] text-slate-500">${a.seats}</span></td>
+                                                <td class="p-2.5 text-amber-300 font-bold">${formatPrice(a.total_amount)}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                    return;
+                }
+
+                container.innerHTML = `<div class="text-rose-400 p-4">${data.error || 'Failed to retrieve attendees'}</div>`;
+            } catch (err) {
+                container.innerHTML = `<div class="text-rose-400 p-4">Error connecting to server.</div>`;
+            }
+        }
+
+        // =====================================================================
+        // AUTHENTICATION LOGIC
+        // =====================================================================
+        async function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('login-username').value.trim();
+            const password = document.getElementById('login-password').value;
+
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await res.json();
+                if (!res.ok) {
+                    showToast(data.error || 'Login failed', 'error');
+                    return;
+                }
+
+                state.jwtToken = data.token;
+                state.currentUser = data.user;
+                localStorage.setItem('eventpulse_jwt', data.token);
+                localStorage.setItem('eventpulse_user', JSON.stringify(data.user));
+
+                updateUserHeaderUI();
+                showToast(`Logged in as ${data.user.full_name || data.user.email}!`, 'success');
+                fetchMyRegistrations();
+                goToStep(2);
+            } catch (err) {
+                showToast('Login request failed', 'error');
+            }
+        }
+
+        async function handleSignup(e) {
+            e.preventDefault();
+            const email = document.getElementById('signup-email').value.trim();
+            const password = document.getElementById('signup-password').value;
+            const fullName = document.getElementById('signup-username').value.trim();
+            const phone = document.getElementById('signup-phone').value.trim();
+
+            try {
+                const res = await fetch(`${API_BASE}/api/auth/signup`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, full_name: fullName, phone })
+                });
+
+                const data = await res.json();
+                if (!res.ok) {
+                    showToast(data.error || 'Signup failed', 'error');
+                    return;
+                }
+
+                showToast('Account created! Logging in...', 'success');
+                document.getElementById('login-username').value = email;
+                document.getElementById('login-password').value = password;
+                document.getElementById('form-login').dispatchEvent(new Event('submit'));
+            } catch (err) {
+                showToast('Signup request failed', 'error');
+            }
+        }
+
+        function fillDemoLogin(role = 'attendee') {
+            if (role === 'organizer') {
+                document.getElementById('login-username').value = 'organizer@eventpulse.io';
+                document.getElementById('login-password').value = 'Organizer#2026';
+                showToast('Organizer credentials populated! Click Login.', 'info');
+            } else {
+                document.getElementById('login-username').value = 'arjun@eventpulse.io';
+                document.getElementById('login-password').value = 'EventPulse#2026';
+                showToast('Attendee credentials populated! Click Login.', 'info');
+            }
+        }
+
+        function logout() {
+            state.jwtToken = null;
+            state.currentUser = null;
+            state.myTickets = [];
+            localStorage.removeItem('eventpulse_jwt');
+            localStorage.removeItem('eventpulse_user');
+            updateUserHeaderUI();
+            showToast('Logged out of session', 'info');
+            goToStep(1);
+        }
+
+        function updateUserHeaderUI() {
+            const pill = document.getElementById('header-user-pill');
+            if (state.currentUser) {
+                pill.classList.remove('hidden');
+                pill.classList.add('flex');
+                document.getElementById('header-username').textContent = state.currentUser.full_name || state.currentUser.email;
+                document.getElementById('header-useremail').textContent = state.currentUser.email;
+                document.getElementById('header-userrole').textContent = state.currentUser.role || 'attendee';
+            } else {
+                pill.classList.add('hidden');
+                pill.classList.remove('flex');
+            }
+        }
+
+        function populateSuccessScreen(reg) {
+            document.getElementById('success-tx-hash').textContent = reg.tx_hash || '0x...';
+            document.getElementById('pass-tier-badge').textContent = `${reg.ticket_tier} PASS (${reg.quantity}x)`;
+            document.getElementById('pass-category').textContent = state.selectedEvent?.category || 'Event Pass';
+            document.getElementById('pass-event-title').textContent = state.selectedEvent?.title || 'Event Pass';
+            document.getElementById('pass-date').textContent = new Date(state.selectedEvent?.date_time || Date.now()).toLocaleDateString();
+            document.getElementById('pass-venue').textContent = state.selectedEvent?.venue || 'Venue TBD';
+            document.getElementById('pass-seats').textContent = reg.seats;
+            document.getElementById('pass-attendee').textContent = state.currentUser?.full_name || 'Attendee';
+            document.getElementById('pass-contact').textContent = state.currentUser?.email || '';
+            document.getElementById('pass-amount').textContent = formatPrice(reg.total_amount);
+            document.getElementById('pass-booking-id').textContent = `#${reg.booking_id}`;
+
+            const gatePayload = JSON.stringify({
+                booking_id: reg.booking_id,
+                event_id: reg.event_id,
+                seats: reg.seats,
+                tx_hash: reg.tx_hash
+            });
+            document.getElementById('pass-qr-box').innerHTML = generateDeterministicQR(gatePayload, 130);
+        }
+
+        function renderCheckoutScreen() {
+            const ev = state.selectedEvent;
+            if (!ev) return;
+
+            const basePrice = Number(ev.price_inr || ev.priceINR || 0);
+            const mult = state.selectedTier === 'VIP' ? 1.8 : state.selectedTier === 'BACKSTAGE' ? 2.5 : 1.0;
+            const subtotal = Math.round(basePrice * mult * state.ticketQty);
+            const fee = Math.round(subtotal * 0.05);
+            const total = subtotal + fee;
+
+            document.getElementById('checkout-event-badge').textContent = `EVENT ID: #${ev.id}`;
+            document.getElementById('checkout-attendee-name').textContent = state.currentUser?.full_name || 'Guest';
+            document.getElementById('checkout-event-category-pill').textContent = ev.category;
+            document.getElementById('checkout-event-title-underline').textContent = ev.title;
+            document.getElementById('checkout-event-date').textContent = new Date(ev.date_time || Date.now()).toLocaleDateString();
+            document.getElementById('checkout-event-venue').textContent = ev.venue;
+            document.getElementById('checkout-event-seats-left').textContent = `${ev.seats_left ?? ev.seatsLeft} seats left`;
+
+            ['STANDARD', 'VIP', 'BACKSTAGE'].forEach(t => {
+                const btn = document.getElementById(`tier-btn-${t}`);
+                if (t === state.selectedTier) {
+                    btn.className = 'tier-btn p-2.5 rounded-xl border-2 border-indigo-500 bg-indigo-500/15 text-left';
+                } else {
+                    btn.className = 'tier-btn p-2.5 rounded-xl border border-slate-700 bg-slate-900/70 text-left';
+                }
+            });
+
+            document.getElementById('checkout-qty-display').textContent = state.ticketQty;
+            document.getElementById('price-base-label').textContent = `Base Pass (${state.ticketQty} × ${state.selectedTier})`;
+            document.getElementById('price-base-val').textContent = formatPrice(subtotal);
+            document.getElementById('price-fee-val').textContent = formatPrice(fee);
+            document.getElementById('price-total-val').textContent = formatPrice(total);
+
+            const qrPayload = JSON.stringify({
+                action: "BUY_TICKET",
+                event_id: ev.id,
+                tier: state.selectedTier,
+                quantity: state.ticketQty,
+                total_amount: total,
+                buyer: state.currentUser?.email || "guest"
+            });
+            document.getElementById('qr-payload-preview').textContent = qrPayload;
+            document.getElementById('dynamic-qr-container').innerHTML = generateDeterministicQR(qrPayload, 210);
+        }
+
+        function goToStep(step) {
+            if (step > 1 && !state.currentUser) {
+                showToast('Please login to proceed', 'info');
+                step = 1;
+            }
+
+            state.currentStep = step;
+            for (let i = 1; i <= 4; i++) {
+                const el = document.getElementById(`screen-${i}`);
+                if (i === step) el.classList.add('active');
+                else el.classList.remove('active');
+            }
+
+            for (let i = 1; i <= 4; i++) {
+                const btn = document.getElementById(`step-btn-${i}`);
+                const num = btn.querySelector('.step-num');
+                if (i === step) {
+                    btn.className = 'step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white shadow-md';
+                    num.className = 'step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono bg-white text-indigo-700 font-bold';
+                    num.textContent = i;
+                } else if (i < step) {
+                    btn.className = 'step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30';
+                    num.className = 'step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono bg-emerald-500 text-slate-950';
+                    num.innerHTML = '✓';
+                } else {
+                    btn.className = 'step-pill flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-slate-200';
+                    num.className = 'step-num w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-mono bg-slate-800 text-slate-400';
+                    num.textContent = i;
+                }
+            }
+
+            if (step === 2) fetchEventsCatalog();
+            if (step === 3) renderCheckoutScreen();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Window Handlers
+        window.app = {
+            handleLogoClick: () => goToStep(state.currentUser ? 2 : 1),
+            stepClick: (s) => goToStep(s),
+            goToStep,
+            focusAuthCard: (mode) => {
+                if (mode === 'signup') {
+                    document.getElementById('auth-signup-panel').classList.add('border-emerald-500');
+                    document.getElementById('signup-email').focus();
+                } else {
+                    document.getElementById('login-username').focus();
+                }
+            },
+            fillDemoLogin,
+            handleLogin,
+            handleSignup,
+            logout,
+            togglePasswordVisibility: (inpId, iconId) => {
+                const inp = document.getElementById(inpId);
+                const ico = document.getElementById(iconId);
+                if (inp.type === 'password') {
+                    inp.type = 'text';
+                    ico.className = 'fa-regular fa-eye-slash text-sm';
+                } else {
+                    inp.type = 'password';
+                    ico.className = 'fa-regular fa-eye text-sm';
+                }
+            },
+            setCategory: (cat) => {
+                state.selectedCategory = cat;
+                state.currentPage = 1;
+                document.querySelectorAll('.cat-pill').forEach(btn => {
+                    if (btn.dataset.cat === cat) {
+                        btn.className = 'cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-indigo-600 text-white shadow-md shrink-0';
+                    } else {
+                        btn.className = 'cat-pill px-4 py-1.5 rounded-full text-xs font-semibold bg-slate-900 text-slate-300 border border-slate-800 shrink-0';
+                    }
+                });
+                fetchEventsCatalog();
+            },
+            handleEventSearch: (val) => {
+                state.searchQuery = val;
+                state.currentPage = 1;
+                fetchEventsCatalog();
+            },
+            setPage: (p) => {
+                state.currentPage = p;
+                fetchEventsCatalog();
+            },
+            openEventDetails,
+            closeEventDetails,
+            viewEventAttendees,
+            getSelectedEventId: () => state.selectedEvent?.id,
+            selectEventForCheckout: (eventId) => {
+                closeEventDetails();
+                const found = state.events.find(e => e.id === eventId);
+                if (found) {
+                    state.selectedEvent = found;
+                    state.selectedTier = 'STANDARD';
+                    state.ticketQty = 1;
+                    goToStep(3);
+                }
+            },
+            setTicketTier: (tier) => {
+                state.selectedTier = tier;
+                renderCheckoutScreen();
+            },
+            changeQuantity: (delta) => {
+                const next = state.ticketQty + delta;
+                if (next >= 1 && next <= 5) {
+                    state.ticketQty = next;
+                    renderCheckoutScreen();
+                }
+            },
+            confirmAndPay,
+            toggleCurrency: () => {
+                state.currency = state.currency === 'INR' ? 'USD' : 'INR';
+                document.getElementById('currency-btn').textContent = state.currency === 'INR' ? '₹ INR' : '$ USD';
+                renderEventsGrid();
+                if (state.selectedEvent) renderCheckoutScreen();
+                renderWalletUI();
+            },
+            toggleWallet: (open) => {
+                const el = document.getElementById('wallet-drawer-backdrop');
+                if (open) {
+                    el.classList.remove('hidden');
+                    el.classList.add('flex');
+                    fetchMyRegistrations();
+                } else {
+                    el.classList.add('hidden');
+                    el.classList.remove('flex');
+                }
+            }
+        };
+
+        // Initialize on DOM load
+        window.addEventListener('DOMContentLoaded', () => {
+            updateUserHeaderUI();
+            if (state.currentUser) {
+                fetchMyRegistrations();
+                goToStep(2);
+            } else {
+                fetchEventsCatalog();
+            }
+        });
+    </script>
+</body>
+</html>
