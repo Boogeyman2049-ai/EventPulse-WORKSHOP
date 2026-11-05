@@ -8,9 +8,14 @@ import express from 'express';
 import cors from 'cors';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -18,6 +23,7 @@ const PORT = process.env.PORT || 5000;
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(morgan('dev'));
+app.use(express.static(path.join(__dirname, 'public')));
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://gqpzenlyqsrcjjeamnyh.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_2LrfbiLq7ZTFAOkVKdlxCQ_GGDGBuul';
@@ -271,15 +277,39 @@ async function authenticateUser(req, res, next) {
 }
 
 // ------------------------------------------------------------------------------
-// ROOT & GET /api/events : Both return the exact target events JSON
+// ROOT & GET /api/events : Smart Content Negotiation
+// Browsers load the interactive Stitch Campus Hub web application.
+// API clients / curl receive the exact 19-event specification JSON.
 // ------------------------------------------------------------------------------
 app.get('/', async (req, res) => {
+    // If browser requesting HTML, serve the frontend web page
+    if (req.accepts('html')) {
+        return res.sendFile(path.join(__dirname, 'public', 'index.html'));
+    }
+    // Otherwise return the exact target events JSON
     try {
         const data = await getFormattedEventsList();
         res.status(200).json(data);
     } catch (err) {
         res.status(500).json({ error: 'Failed to retrieve events', details: err.message });
     }
+});
+
+// Service Status Endpoint (Matches EventPulse Status Schema)
+app.get(['/api', '/status', '/api/status'], (req, res) => {
+    res.status(200).json({
+        service: "EventPulse Backend API",
+        status: "ONLINE",
+        version: "1.0.0",
+        database: "Supabase PostgreSQL",
+        endpoints: {
+            "GET /api/events": "Browse all events with live seat calculations",
+            "GET /api/events/:id": "Get event details by event_id or id",
+            "POST /api/registrations": "Register for an event (201 Created or 409 Conflict)",
+            "GET /api/me/registrations": "Get current user registrations",
+            "GET /api/events/:id/registrations": "Get attendee roster (Owning organizer only; 403 Forbidden otherwise)"
+        }
+    });
 });
 
 app.get('/api/events', async (req, res) => {
@@ -439,6 +469,51 @@ app.get('/api/me/registrations', authenticateUser, async (req, res) => {
             userId,
             totalRegistrations: myRegistrations ? myRegistrations.length : 0,
             registrations: myRegistrations || []
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Internal server error', details: err.message });
+    }
+});
+
+// ------------------------------------------------------------------------------
+// DELETE /api/registrations/:id : Cancel an existing RSVP / ticket
+// ------------------------------------------------------------------------------
+app.delete('/api/registrations/:id', authenticateUser, async (req, res) => {
+    try {
+        const regId = req.params.id;
+        const requestingUserId = req.user.id || req.user.uuid;
+
+        // Verify registration exists
+        const { data: reg, error: fetchErr } = await supabase
+            .from('registrations')
+            .select('*')
+            .eq('id', regId)
+            .maybeSingle();
+
+        if (fetchErr || !reg) {
+            return res.status(404).json({ error: 'Registration not found', code: 'REGISTRATION_NOT_FOUND' });
+        }
+
+        const ownerId = reg.user_id || reg.student_id;
+        if (ownerId !== requestingUserId) {
+            return res.status(403).json({
+                error: 'Forbidden: You can only cancel your own registrations',
+                code: 'FORBIDDEN_NOT_OWNER'
+            });
+        }
+
+        const { error: deleteErr } = await supabase
+            .from('registrations')
+            .delete()
+            .eq('id', regId);
+
+        if (deleteErr) {
+            return res.status(500).json({ error: 'Failed to cancel registration', details: deleteErr.message });
+        }
+
+        res.status(200).json({
+            message: 'Registration successfully canceled.',
+            registrationId: regId
         });
     } catch (err) {
         res.status(500).json({ error: 'Internal server error', details: err.message });
