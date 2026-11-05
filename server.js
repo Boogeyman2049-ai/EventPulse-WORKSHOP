@@ -1,7 +1,9 @@
 // ==============================================================================
 // EventPulse Pure Backend REST API (Node.js / Express + Supabase PostgreSQL)
-// Designed for production deployment on Render.com
-// Implements 5 Required REST Endpoints, 201/409/403 Status Codes, & Zero-Frontend
+// Fully compatible with both Teacher Schema and Standard PostgreSQL Schema:
+//   - users: (uuid, id, email, role)
+//   - events: (event_id, id, student_id, organiser_id, title, capacity, created_at, timestamp)
+//   - registrations: (id, student_id, user_id, event_id, created_at, createdAt)
 // ==============================================================================
 
 import express from 'express';
@@ -15,42 +17,106 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS and JSON parsing
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 app.use(morgan('dev'));
 
-// ------------------------------------------------------------------------------
-// SUPABASE CLIENT INITIALIZATION
-// ------------------------------------------------------------------------------
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || '';
-
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-    console.warn('⚠️ SUPABASE_URL or SUPABASE_KEY is missing from environment variables.');
-}
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false }
 });
 
-console.log('✅ Supabase client initialized.');
+console.log('✅ Supabase Client initialized for teacher database schema.');
 
 // ------------------------------------------------------------------------------
-// ROOT ENDPOINT: API HEALTH & DOCUMENTATION (Pure Backend)
+// UNIVERSAL DATABASE QUERY HELPERS
+// (Resilient whether custom column aliases exist yet or not)
+// ------------------------------------------------------------------------------
+async function findUserByIdOrEmail(token) {
+    if (token.includes('@')) {
+        const { data } = await supabase.from('users').select('*').eq('email', token).maybeSingle();
+        if (data) return data;
+    }
+    // Try id
+    let { data: byId } = await supabase.from('users').select('*').eq('id', token).maybeSingle();
+    if (byId) return byId;
+
+    // Try uuid if column exists
+    try {
+        const { data: byUuid, error } = await supabase.from('users').select('*').eq('uuid', token).maybeSingle();
+        if (!error && byUuid) return byUuid;
+    } catch (_) {}
+
+    return null;
+}
+
+async function findEventById(eventId) {
+    // Try id
+    let { data: byId, error: err1 } = await supabase
+        .from('events')
+        .select('*, registrations(count)')
+        .eq('id', eventId)
+        .maybeSingle();
+
+    if (!err1 && byId) return byId;
+
+    // Try event_id if column exists
+    try {
+        const { data: byEventId, error: err2 } = await supabase
+            .from('events')
+            .select('*, registrations(count)')
+            .eq('event_id', eventId)
+            .maybeSingle();
+
+        if (!err2 && byEventId) return byEventId;
+    } catch (_) {}
+
+    return null;
+}
+
+async function findExistingRegistration(eventId, userId) {
+    // Check by user_id & event_id
+    let { data, error } = await supabase
+        .from('registrations')
+        .select('*')
+        .eq('event_id', eventId)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (!error && data) return data;
+
+    // Try student_id
+    try {
+        const { data: byStudent, error: err2 } = await supabase
+            .from('registrations')
+            .select('*')
+            .eq('event_id', eventId)
+            .eq('student_id', userId)
+            .maybeSingle();
+
+        if (!err2 && byStudent) return byStudent;
+    } catch (_) {}
+
+    return null;
+}
+
+// ------------------------------------------------------------------------------
+// ROOT ENDPOINT: API STATUS & SPECIFICATION (Pure Backend - No Frontend)
 // ------------------------------------------------------------------------------
 app.get('/', (req, res) => {
     res.status(200).json({
         service: 'EventPulse Backend API',
-        version: '1.0.0',
         status: 'ONLINE',
+        version: '1.0.0',
         database: 'Supabase PostgreSQL',
         endpoints: {
-            'GET /api/events': 'Browse all events with live capacity and seat calculations',
-            'GET /api/events/:id': 'Get event details by ID',
-            'POST /api/registrations': 'Register for an event (Returns 201 Created or 409 Conflict)',
-            'GET /api/me/registrations': 'Get current user registrations (Authenticated)',
-            'GET /api/events/:id/registrations': 'Get attendee list (Owning organizer only - 403 Forbidden otherwise)'
+            'GET /api/events': 'Browse all events with live seat calculations',
+            'GET /api/events/:id': 'Get event details by event_id or id',
+            'POST /api/registrations': 'Register for an event (201 Created or 409 Conflict)',
+            'GET /api/me/registrations': 'Get current user registrations',
+            'GET /api/events/:id/registrations': 'Get attendee roster (Owning organizer only; 403 Forbidden otherwise)'
         }
     });
 });
@@ -61,11 +127,11 @@ app.get('/api/health', (req, res) => {
 
 // ------------------------------------------------------------------------------
 // AUTHENTICATION MIDDLEWARE
-// Supports:
-//   1. Standard Supabase JWT (Bearer <token>)
-//   2. Direct User ID as Bearer token (Bearer <uuid>)
-//   3. User Email as Bearer token (Bearer <email>)
-//   4. Custom Header: x-user-id: <uuid>
+// Resolves token by:
+//   1. Supabase JWT (Bearer <jwt>)
+//   2. Direct UUID (Bearer <uuid>) matching users.uuid or users.id
+//   3. Email (Bearer <email>)
+//   4. Header x-user-id: <uuid>
 // ------------------------------------------------------------------------------
 async function authenticateUser(req, res, next) {
     let token = null;
@@ -79,24 +145,20 @@ async function authenticateUser(req, res, next) {
 
     if (!token) {
         return res.status(401).json({
-            error: 'Unauthorized: Missing or malformed authentication. Provide Bearer token or x-user-id header.',
+            error: 'Unauthorized: Missing or malformed authentication header. Provide Bearer token or x-user-id header.',
             code: 'AUTH_REQUIRED'
         });
     }
 
     try {
-        // Option A: Try verifying as Supabase JWT
+        // Try Supabase JWT
         if (token.startsWith('ey')) {
             const { data: { user }, error } = await supabase.auth.getUser(token);
             if (!error && user) {
-                const { data: userRow } = await supabase
-                    .from('users')
-                    .select('id, email, role')
-                    .eq('id', user.id)
-                    .maybeSingle();
-
+                const userRow = await findUserByIdOrEmail(user.id);
                 req.user = {
                     id: user.id,
+                    uuid: user.id,
                     email: user.email,
                     role: userRow?.role || 'attendee'
                 };
@@ -104,23 +166,14 @@ async function authenticateUser(req, res, next) {
             }
         }
 
-        // Option B: Resolve direct User UUID or Email from public.users table
-        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token);
-        let userQuery = supabase.from('users').select('id, email, role');
-
-        if (isUUID) {
-            userQuery = userQuery.eq('id', token);
-        } else if (token.includes('@')) {
-            userQuery = userQuery.eq('email', token);
-        } else {
-            userQuery = userQuery.or(`id.eq.${token},email.eq.${token}`);
-        }
-
-        const { data: userProfile, error: profileErr } = await userQuery.maybeSingle();
+        // Direct UUID / Email lookup
+        const userProfile = await findUserByIdOrEmail(token);
 
         if (userProfile) {
+            const resolvedId = userProfile.uuid || userProfile.id;
             req.user = {
-                id: userProfile.id,
+                id: resolvedId,
+                uuid: resolvedId,
                 email: userProfile.email,
                 role: userProfile.role || 'attendee'
             };
@@ -137,7 +190,7 @@ async function authenticateUser(req, res, next) {
 }
 
 // ------------------------------------------------------------------------------
-// 1. GET /api/events : Browse events with live seat calculations & optional filters
+// 1. GET /api/events : Browse events with capacity calculation
 // ------------------------------------------------------------------------------
 app.get('/api/events', async (req, res) => {
     try {
@@ -145,8 +198,7 @@ app.get('/api/events', async (req, res) => {
 
         let query = supabase
             .from('events')
-            .select('id, organiser_id, title, capacity, timestamp, registrations(count)', { count: 'exact' })
-            .order('timestamp', { ascending: true, nullsFirst: false });
+            .select('*, registrations(count)', { count: 'exact' });
 
         if (search) {
             query = query.ilike('title', `%${search}%`);
@@ -165,26 +217,31 @@ app.get('/api/events', async (req, res) => {
             return res.status(500).json({ error: 'Database query failed', details: error.message });
         }
 
-        // Calculate live occupied and seats_left dynamically from database
-        const formattedEvents = (events || []).map(ev => {
-            const occupied = ev.registrations?.[0]?.count || 0;
+        const formatted = (events || []).map(ev => {
+            const eventId = ev.event_id || ev.id;
+            const organiserId = ev.student_id || ev.organiser_id;
             const capacity = Number(ev.capacity) || 0;
+            const occupied = ev.registrations?.[0]?.count || 0;
             const seatsLeft = Math.max(0, capacity - occupied);
+            const createdAt = ev.created_at || ev.timestamp;
 
             return {
-                id: ev.id,
-                organiser_id: ev.organiser_id,
+                id: eventId,
+                event_id: eventId,
+                organiser_id: organiserId,
+                student_id: organiserId,
                 title: ev.title,
-                capacity: capacity,
-                occupied: occupied,
+                capacity,
+                occupied,
                 seats_left: seatsLeft,
-                timestamp: ev.timestamp
+                created_at: createdAt,
+                timestamp: createdAt
             };
         });
 
         res.status(200).json({
-            total: count ?? formattedEvents.length,
-            events: formattedEvents
+            total: count ?? formatted.length,
+            events: formatted
         });
     } catch (err) {
         res.status(500).json({ error: 'Internal server error', details: err.message });
@@ -197,29 +254,31 @@ app.get('/api/events', async (req, res) => {
 app.get('/api/events/:id', async (req, res) => {
     try {
         const { id } = req.params;
+        const ev = await findEventById(id);
 
-        const { data: ev, error } = await supabase
-            .from('events')
-            .select('id, organiser_id, title, capacity, timestamp, registrations(count)')
-            .eq('id', id)
-            .single();
-
-        if (error || !ev) {
+        if (!ev) {
             return res.status(404).json({ error: 'Event not found', code: 'EVENT_NOT_FOUND' });
         }
 
-        const occupied = ev.registrations?.[0]?.count || 0;
+        const eventId = ev.event_id || ev.id;
+        const organiserId = ev.student_id || ev.organiser_id;
         const capacity = Number(ev.capacity) || 0;
+        const occupied = ev.registrations?.[0]?.count || 0;
+        const seatsLeft = Math.max(0, capacity - occupied);
+        const createdAt = ev.created_at || ev.timestamp;
 
         res.status(200).json({
             event: {
-                id: ev.id,
-                organiser_id: ev.organiser_id,
+                id: eventId,
+                event_id: eventId,
+                organiser_id: organiserId,
+                student_id: organiserId,
                 title: ev.title,
-                capacity: capacity,
-                occupied: occupied,
-                seats_left: Math.max(0, capacity - occupied),
-                timestamp: ev.timestamp
+                capacity,
+                occupied,
+                seats_left: seatsLeft,
+                created_at: createdAt,
+                timestamp: createdAt
             }
         });
     } catch (err) {
@@ -229,27 +288,26 @@ app.get('/api/events/:id', async (req, res) => {
 
 // ------------------------------------------------------------------------------
 // 3. POST /api/registrations : Create registration
-// Returns 201 Created on success, or 409 Conflict if already registered or full
+// Returns 201 Created or 409 Conflict
 // ------------------------------------------------------------------------------
 app.post('/api/registrations', authenticateUser, async (req, res) => {
     try {
-        const userId = req.user.id;
-        const eventId = req.body.event_id || req.body.eventId;
+        const userId = req.user.id || req.user.uuid;
+        const eventId = req.body.event_id || req.body.eventId || req.body.id;
 
         if (!eventId) {
             return res.status(400).json({ error: 'event_id is required', code: 'MISSING_EVENT_ID' });
         }
 
-        // ----------------------------------------------------------------------
-        // CONFLICT CHECK 1: Is user already registered for this event?
-        // ----------------------------------------------------------------------
-        const { data: existingReg } = await supabase
-            .from('registrations')
-            .select('id, event_id, user_id, "createdAt"')
-            .eq('event_id', eventId)
-            .eq('user_id', userId)
-            .maybeSingle();
+        const ev = await findEventById(eventId);
+        if (!ev) {
+            return res.status(404).json({ error: 'Event not found', code: 'EVENT_NOT_FOUND' });
+        }
 
+        const resolvedEventId = ev.event_id || ev.id;
+
+        // Conflict Check 1: User already registered for this event
+        const existingReg = await findExistingRegistration(resolvedEventId, userId);
         if (existingReg) {
             return res.status(409).json({
                 error: 'Conflict: User is already registered for this event.',
@@ -258,19 +316,7 @@ app.post('/api/registrations', authenticateUser, async (req, res) => {
             });
         }
 
-        // ----------------------------------------------------------------------
-        // CONFLICT CHECK 2: Is the event full?
-        // ----------------------------------------------------------------------
-        const { data: ev, error: evErr } = await supabase
-            .from('events')
-            .select('id, title, capacity, registrations(count)')
-            .eq('id', eventId)
-            .single();
-
-        if (evErr || !ev) {
-            return res.status(404).json({ error: 'Event not found', code: 'EVENT_NOT_FOUND' });
-        }
-
+        // Conflict Check 2: Event capacity full
         const occupied = ev.registrations?.[0]?.count || 0;
         const capacity = Number(ev.capacity) || 0;
 
@@ -283,22 +329,40 @@ app.post('/api/registrations', authenticateUser, async (req, res) => {
             });
         }
 
-        // ----------------------------------------------------------------------
-        // INSERT REGISTRATION (Returns 201 Created)
-        // ----------------------------------------------------------------------
-        const { data: newReg, error: insertErr } = await supabase
+        // Insert registration (supports both teacher schema and legacy schema)
+        const nowIso = new Date().toISOString();
+        let insertPayload = {
+            event_id: resolvedEventId,
+            student_id: userId,
+            user_id: userId,
+            created_at: nowIso,
+            createdAt: nowIso
+        };
+
+        let { data: newReg, error: insertErr } = await supabase
             .from('registrations')
-            .insert({
-                user_id: userId,
-                event_id: eventId,
-                createdAt: new Date().toISOString()
-            })
+            .insert(insertPayload)
             .select('*')
             .single();
 
+        // If schema cache hasn't loaded student_id or created_at yet, fallback to standard columns
+        if (insertErr && insertErr.message && insertErr.message.includes('schema cache')) {
+            insertPayload = {
+                event_id: resolvedEventId,
+                user_id: userId,
+                createdAt: nowIso
+            };
+            const fallback = await supabase
+                .from('registrations')
+                .insert(insertPayload)
+                .select('*')
+                .single();
+            newReg = fallback.data;
+            insertErr = fallback.error;
+        }
+
         if (insertErr) {
-            // Check for PostgreSQL unique constraint code 23505
-            if (insertErr.code === '23505') {
+            if (insertErr.code === '23505' || insertErr.message.includes('unique')) {
                 return res.status(409).json({
                     error: 'Conflict: User is already registered for this event.',
                     code: 'ALREADY_REGISTERED'
@@ -317,29 +381,31 @@ app.post('/api/registrations', authenticateUser, async (req, res) => {
 });
 
 // ------------------------------------------------------------------------------
-// 4. GET /api/me/registrations : Current user's registrations
+// 4. GET /api/me/registrations : Current user registrations
 // ------------------------------------------------------------------------------
 app.get('/api/me/registrations', authenticateUser, async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.user.id || req.user.uuid;
 
-        const { data: myRegistrations, error } = await supabase
+        let { data: myRegistrations, error } = await supabase
             .from('registrations')
-            .select(`
-                id,
-                user_id,
-                event_id,
-                createdAt,
-                event:events (
-                    id,
-                    title,
-                    capacity,
-                    timestamp,
-                    organiser_id
-                )
-            `)
+            .select('*, event:events(*)')
             .eq('user_id', userId)
-            .order('createdAt', { ascending: false });
+            .order('id', { ascending: false });
+
+        if (error || !myRegistrations || myRegistrations.length === 0) {
+            try {
+                const { data: byStudent, error: err2 } = await supabase
+                    .from('registrations')
+                    .select('*, event:events(*)')
+                    .eq('student_id', userId)
+                    .order('id', { ascending: false });
+                if (!err2 && byStudent && byStudent.length > 0) {
+                    myRegistrations = byStudent;
+                    error = null;
+                }
+            } catch (_) {}
+        }
 
         if (error) {
             return res.status(500).json({ error: 'Failed to retrieve registrations', details: error.message });
@@ -362,26 +428,24 @@ app.get('/api/me/registrations', authenticateUser, async (req, res) => {
 app.get('/api/events/:id/registrations', authenticateUser, async (req, res) => {
     try {
         const eventId = req.params.id;
-        const requestingUserId = req.user.id;
+        const requestingUserId = req.user.id || req.user.uuid;
 
-        // Step 1: Look up event to inspect organiser_id
-        const { data: event, error: eventErr } = await supabase
-            .from('events')
-            .select('id, title, organiser_id, capacity')
-            .eq('id', eventId)
-            .single();
+        // Step 1: Look up event to inspect student_id / organiser_id
+        const event = await findEventById(eventId);
 
-        if (eventErr || !event) {
+        if (!event) {
             return res.status(404).json({ error: 'Event not found', code: 'EVENT_NOT_FOUND' });
         }
 
-        // Step 2: RESTRICTION CHECK: Must match event.organiser_id
-        if (event.organiser_id !== requestingUserId) {
+        const organiserId = event.student_id || event.organiser_id;
+
+        // Step 2: RESTRICTION CHECK: Must match owning organizer
+        if (organiserId !== requestingUserId) {
             return res.status(403).json({
                 error: 'Forbidden: Only the owning organizer can access the attendee list for this event.',
                 code: 'FORBIDDEN_NOT_ORGANIZER',
                 eventId,
-                organiserId: event.organiser_id,
+                organiserId,
                 requesterId: requestingUserId
             });
         }
@@ -389,24 +453,15 @@ app.get('/api/events/:id/registrations', authenticateUser, async (req, res) => {
         // Step 3: Fetch attendees joined with user profile
         const { data: attendees, error: attendeesErr } = await supabase
             .from('registrations')
-            .select(`
-                id,
-                createdAt,
-                user:users (
-                    id,
-                    email,
-                    role
-                )
-            `)
-            .eq('event_id', eventId)
-            .order('createdAt', { ascending: false });
+            .select('*, user:users(*)')
+            .eq('event_id', event.event_id || event.id);
 
         if (attendeesErr) {
             return res.status(500).json({ error: 'Failed to retrieve attendee list', details: attendeesErr.message });
         }
 
         res.status(200).json({
-            eventId: event.id,
+            eventId: event.event_id || event.id,
             eventTitle: event.title,
             capacity: event.capacity,
             totalAttendees: attendees ? attendees.length : 0,
@@ -417,57 +472,11 @@ app.get('/api/events/:id/registrations', authenticateUser, async (req, res) => {
     }
 });
 
-// ------------------------------------------------------------------------------
-// CONVENIENCE LOGIN ROUTE FOR TESTING (POST /api/auth/login)
-// ------------------------------------------------------------------------------
-app.post('/api/auth/login', async (req, res) => {
-    try {
-        const { email, password } = req.body;
-        if (!email) return res.status(400).json({ error: 'Email required' });
-
-        // Lookup in public.users
-        const { data: user } = await supabase
-            .from('users')
-            .select('id, email, role')
-            .eq('email', email)
-            .maybeSingle();
-
-        if (user) {
-            return res.status(200).json({
-                token: user.id,
-                user: user
-            });
-        }
-
-        // Fallback Supabase auth
-        if (password) {
-            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-            if (!error && data?.session) {
-                return res.status(200).json({
-                    token: data.session.access_token,
-                    user: data.user
-                });
-            }
-        }
-
-        res.status(401).json({ error: 'User not found' });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// ------------------------------------------------------------------------------
-// 404 CATCH-ALL FOR UNMATCHED ROUTES
-// ------------------------------------------------------------------------------
 app.use((req, res) => {
-    res.status(404).json({
-        error: 'Route not found',
-        path: req.originalUrl
-    });
+    res.status(404).json({ error: 'Route not found', path: req.originalUrl });
 });
 
-// Start Server on 0.0.0.0 (Required for Render)
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`\n🚀 EventPulse Pure Backend API running on port ${PORT}`);
-    console.log(`📡 Root URL: http://0.0.0.0:${PORT}`);
+    console.log(`📡 URL: http://0.0.0.0:${PORT}`);
 });
